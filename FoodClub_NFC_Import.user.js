@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Food Club: NFC Import + Tidy
 // @namespace    foodclub-nfc-import
-// @version      1.0
+// @version      1.1
 // @description  Adds a NeoFoodClub importer to the revamped Food Club "Place a Bet" tab, and trims some page clutter.
 // @match        https://www.neopets.com/pirates/foodclub.phtml*
 // @match        https://neopets.com/pirates/foodclub.phtml*
@@ -101,6 +101,31 @@
 
     // ───────────── Panel ─────────────
     let queue = [];                       // [{sel:[0..4 pirate positions], amount}]
+
+    // Parse NFC text into the queue; returns false if no bet string was found.
+    function loadQueue(text) {
+        const parsed = parseNFC(text);
+        if (!parsed) return false;
+        queue = parsed.bets.map((sel, i) => ({
+            sel,
+            amount: parsed.amounts[i] || parsed.amounts[0] || NaN,   // NaN → clamps to that bet's max
+        }));
+        return true;
+    }
+
+    // Import ?b= and ?a= from the page URL as soon as the script runs, whichever tab is showing.
+    // The panel picks the queue up when it is built.
+    let urlImport = '';
+    {
+        const params = new URLSearchParams(location.search);
+        const hash = new URLSearchParams(location.hash.replace(/^#/, ''));   // NFC links sometimes carry b= in the hash
+        const b = (params.get('b') || hash.get('b') || '').trim(), a = (params.get('a') || hash.get('a') || '').trim();
+        if (b) {
+            const text = `?b=${b}` + (a ? `&a=${a}` : '');   // parseNFC reads b=/a= pieces
+            if (loadQueue(text)) urlImport = text;
+            else console.warn('[NFC import] could not parse b from URL:', b);
+        }
+    }
 
     function el(tag, attrs, html) {
         const e = document.createElement(tag);
@@ -235,15 +260,11 @@
             actions.style.display = has ? 'block' : 'none';
         };
 
-        panel.querySelector('#fcx-load').addEventListener('click', () => {
-            const parsed = parseNFC(panel.querySelector('#fcx-input').value);
-            if (!parsed) { panel.querySelector('#fcx-status').textContent = 'Couldn\'t find a b= bet string in that text.'; return; }
-            queue = parsed.bets.map((sel, i) => ({
-                sel,
-                amount: parsed.amounts[i] || parsed.amounts[0] || NaN,   // NaN → clamps to that bet's max
-            }));
+        const loadBets = () => {
+            if (!loadQueue(panel.querySelector('#fcx-input').value)) { panel.querySelector('#fcx-status').textContent = 'Couldn\'t find a b= bet string in that text.'; return; }
             refresh();
-        });
+        };
+        panel.querySelector('#fcx-load').addEventListener('click', loadBets);
         panel.querySelector('#fcx-bulk-apply').addEventListener('click', () => {
             const v = parseInt(panel.querySelector('#fcx-bulk-amt').value, 10);
             if (isNaN(v)) return;
@@ -261,7 +282,8 @@
             if (confirm(`Place ${queue.filter(b => totalOdds(b.sel, info.arenas)).length} bet(s) totalling ${total.toLocaleString()} NP?`)) placeAll(panel, info, ev.target);
         };
 
-        if (queue.length) refresh();    // keep an imported queue when switching tabs and coming back
+        if (urlImport) panel.querySelector('#fcx-input').value = urlImport;   // show what was auto-loaded from the URL
+        if (queue.length) refresh();    // shows the URL import, and keeps an imported queue when switching tabs and coming back
         return panel;
     }
 
